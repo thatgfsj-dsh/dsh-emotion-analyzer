@@ -16,10 +16,14 @@ import { EmotionScorer, type EmotionScorerOptions } from '../inference.ts'
 import { LEGACY_MODEL_ID, getModelPreset, type ModelPreset } from './registry.ts'
 import { ModelManager, ModelManagerError, type ModelStatus } from './manager.ts'
 import { getMappingProfile, type MappingProfile, type MappingProfileId } from './profiles.ts'
+import { ApiScorer, API_PROFILE_ID, type ApiScorerOptions } from './api-scorer.ts'
 import {
   DEFAULT_SETTINGS,
+  apiKeyOf,
   loadSettings,
   saveSettings,
+  validateApiProvider,
+  type ApiProviderSettings,
   type PluginSettings,
   type ProviderSettings,
 } from '../settings.ts'
@@ -63,6 +67,14 @@ export interface ModelStatePayload {
   readonly runtimeError: string | null
   readonly models: readonly ModelStateEntry[]
   readonly provider: ProviderSettings
+  /** API 通道是否就绪（本地通道恒为 true；错误原因用于设置页提示）。 */
+  readonly providerStatus: ProviderStatus
+}
+
+/** provider 就绪状态。 */
+export interface ProviderStatus {
+  readonly ready: boolean
+  readonly error: string | null
 }
 
 /** state.models[] 的条目。 */
@@ -113,6 +125,12 @@ export interface EmotionModelServiceOptions {
   readonly logger?: Pick<Console, 'warn' | 'error'>
   /** 测试注入假 scorer / 假设置读写。 */
   readonly scorerFactory?: (options: EmotionScorerOptions) => EmotionScorer
+  /** 测试注入 API 打分器（默认按 provider 构造）。 */
+  readonly apiScorerFactory?: (options: ApiScorerOptions) => ApiScorer
+  /** 测试注入 fetch（API 通道）。 */
+  readonly fetchImpl?: typeof fetch
+  /** 测试注入环境变量表（API 密钥读取）。 */
+  readonly env?: Readonly<Record<string, string | undefined>>
   readonly settingsLoader?: () => Promise<PluginSettings>
   readonly settingsSaver?: (settings: PluginSettings) => Promise<void>
 }
@@ -154,6 +172,10 @@ export class EmotionModelService {
   private readyPromise: Promise<boolean> | undefined
   private runtimeError: string | null = null
   private warnedFallback = false
+  private apiScorer: ApiScorer | undefined
+  private providerStatus: ProviderStatus = { ready: true, error: null }
+  /** 最近一次 API 失败原因（成功一次即清空），用于 state 提示。 */
+  private lastApiError: string | null = null
 
   constructor(options: EmotionModelServiceOptions = {}) {
     this.options = options
@@ -197,10 +219,18 @@ export class EmotionModelService {
     this.settingsState = this.options.settingsLoader
       ? await this.options.settingsLoader()
       : await loadSettings({ baseDir: this.options.baseDir, logger: this.logger })
+    const isApi = this.settingsState.provider.type === 'api'
     const resolved = await this.resolveRuntime(this.settingsState.activeModelId)
     this.active = resolved.runtime
-    this.runtimeError = resolved.error ?? null
     this.ready = 'idle'
+    if (isApi) {
+      // API 通道不要求本地模型；本地运行时只作为失败回退。
+      this.runtimeError = null
+      this.providerStatus = this.apiStatus()
+      return
+    }
+    this.runtimeError = resolved.error ?? null
+    this.providerStatus = { ready: true, error: null }
     if (this.active?.fallbackActive === true && !this.warnedFallback) {
       this.warnedFallback = true
       this.logger.warn?.(
@@ -306,6 +336,20 @@ export class EmotionModelService {
    */
   async ensureReady(): Promise<boolean> {
     await this.initialize()
+    if (this.settingsState.provider.type === 'api') {
+      const status = this.apiStatus()
+      this.providerStatus = status
+      if (status.ready) return true
+      this.logger.warn?.(
+        `[emotion] API 通道未就绪（${status.error ?? '未知原因'}），本轮回退本地模型。`,
+      )
+      return this.ensureLocalReady()
+    }
+    return this.ensureLocalReady()
+  }
+
+  /** 本地 ONNX 通道就绪：必要时加载模型（懒加载 + 失败回退）。 */
+  private async ensureLocalReady(): Promise<boolean> {
     if (this.ready === 'ready') return true
     if (this.ready === 'failed') return false
     this.readyPromise ??= this.doEnsureReady()
@@ -378,9 +422,52 @@ export class EmotionModelService {
     if (scorer !== undefined) void scorer.dispose()
   }
 
-  /** 对文本打分；模型不可用 / 推理失败返回 undefined（不抛）。 */
+  /**
+   * 对文本打分；通道不可用 / 失败返回 undefined（不抛）。
+   *
+   * API 通道失败（超时 / HTTP / JSON 非法 / 密钥缺失）时回退本地 ONNX，
+   * 并把 `fallbackActive` 置 true；本地也不可用则本轮跳过。
+   */
   async score(text: string): Promise<ScoreResult | undefined> {
-    if (!(await this.ensureReady())) return undefined
+    await this.initialize()
+    if (this.settingsState.provider.type === 'api') {
+      const viaApi = await this.scoreWithApi(text)
+      if (viaApi !== undefined) return viaApi
+      const viaLocal = await this.scoreWithLocal(text)
+      if (viaLocal !== undefined) return { ...viaLocal, fallbackActive: true }
+      return undefined
+    }
+    return this.scoreWithLocal(text)
+  }
+
+  /** API 通道打分；失败返回 undefined（原因写进 providerStatus）。 */
+  private async scoreWithApi(text: string): Promise<ScoreResult | undefined> {
+    const provider = this.settingsState.provider
+    if (provider.type !== 'api') return undefined
+    const scorer = this.ensureApiScorer(provider)
+    try {
+      const outcome = await scorer.score(text)
+      this.lastApiError = null
+      this.providerStatus = { ready: true, error: null }
+      return {
+        raw: outcome.scores,
+        modelId: `api:${outcome.modelId}`,
+        profileId: API_PROFILE_ID,
+        latencyMs: outcome.latencyMs,
+        fallbackActive: false,
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.lastApiError = message
+      this.providerStatus = { ready: false, error: message }
+      this.logger.warn?.(`[emotion] API 打分失败，尝试本地回退：${message}`)
+      return undefined
+    }
+  }
+
+  /** 本地 ONNX 通道打分（原 v0.2 行为）。 */
+  private async scoreWithLocal(text: string): Promise<ScoreResult | undefined> {
+    if (!(await this.ensureLocalReady())) return undefined
     const runtime = this.active
     const scorer = this.scorer
     if (runtime === undefined || scorer === undefined) return undefined
@@ -397,9 +484,27 @@ export class EmotionModelService {
     }
   }
 
-  /** `POST test`：返回统一 7 维分数；没有可用模型时给出明确错误。 */
+  /** `POST test`：返回统一 7 维分数；没有可用通道时给出明确错误。 */
   async testModel(text: string): Promise<TestResult> {
-    if (!(await this.ensureReady())) {
+    await this.initialize()
+    if (this.settingsState.provider.type === 'api') {
+      const provider = this.settingsState.provider
+      const status = this.apiStatus()
+      this.providerStatus = status
+      if (!status.ready) {
+        throw new ModelServiceError('provider_unavailable', status.error ?? 'API 通道未就绪', 503)
+      }
+      const scorer = this.ensureApiScorer(provider)
+      try {
+        const outcome = await scorer.score(text)
+        return { scores: outcome.scores, modelId: `api:${outcome.modelId}`, latencyMs: outcome.latencyMs }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.providerStatus = { ready: false, error: message }
+        throw new ModelServiceError('api_failed', message, 502)
+      }
+    }
+    if (!(await this.ensureLocalReady())) {
       throw new ModelServiceError(
         'model_unavailable',
         this.runtimeError ?? '没有可用的本地模型，请先在设置页下载/安装模型。',
@@ -432,6 +537,10 @@ export class EmotionModelService {
       runtimeError: this.runtimeError,
       models: statuses.map((status) => this.entryOf(status)),
       provider: this.settingsState.provider,
+      providerStatus:
+        this.settingsState.provider.type === 'api'
+          ? this.apiStatus()
+          : { ready: this.active !== undefined, error: this.runtimeError },
     }
   }
 
@@ -531,6 +640,72 @@ export class EmotionModelService {
     return this.getState()
   }
 
+  /** 切换打分通道（设置页 / Host API）。 */
+  async selectProvider(provider: ProviderSettings): Promise<ModelStatePayload> {
+    await this.initialize()
+    let nextProvider: ProviderSettings
+    if (provider.type === 'api') {
+      const validated = validateApiProvider(provider)
+      if (validated.settings === undefined) {
+        throw new ModelServiceError('invalid_provider', validated.error ?? 'API 配置非法', 400)
+      }
+      nextProvider = validated.settings
+    } else {
+      nextProvider = { type: 'local' }
+    }
+    const nextSettings: PluginSettings = { ...this.settingsState, provider: nextProvider }
+    if (this.options.settingsSaver !== undefined) await this.options.settingsSaver(nextSettings)
+    else await saveSettings(nextSettings, { baseDir: this.options.baseDir })
+    this.settingsState = nextSettings
+    this.disposeApiScorer()
+    this.lastApiError = null
+    this.ready = 'idle'
+    this.readyPromise = undefined
+    this.runtimeError = null
+    this.warnedFallback = false
+    if (nextProvider.type === 'api') {
+      this.providerStatus = this.apiStatus()
+    } else {
+      await this.refreshRuntime()
+      this.providerStatus = { ready: this.active !== undefined, error: this.runtimeError }
+    }
+    return this.getState()
+  }
+
+  /** 计算 API 通道就绪状态（配置 + 密钥环境变量）。 */
+  private apiStatus(): ProviderStatus {
+    const provider = this.settingsState.provider
+    if (provider.type !== 'api') return { ready: true, error: null }
+    const validated = validateApiProvider(provider)
+    if (validated.settings === undefined) {
+      return { ready: false, error: validated.error ?? 'API 配置非法' }
+    }
+    const settings = validated.settings
+    if (settings.apiKeyEnv !== undefined && apiKeyOf(settings, this.options.env ?? process.env) === undefined) {
+      return { ready: false, error: `环境变量 ${settings.apiKeyEnv} 未设置` }
+    }
+    if (this.lastApiError !== null) return { ready: false, error: this.lastApiError }
+    return { ready: true, error: null }
+  }
+
+  /** 惰性创建 API 打分器（provider 切换时丢弃）。 */
+  private ensureApiScorer(provider: ApiProviderSettings): ApiScorer {
+    if (this.apiScorer === undefined) {
+      const factory = this.options.apiScorerFactory ?? ((options: ApiScorerOptions) => new ApiScorer(options))
+      this.apiScorer = factory({
+        provider,
+        logger: this.logger,
+        ...(this.options.fetchImpl === undefined ? {} : { fetchImpl: this.options.fetchImpl }),
+        ...(this.options.env === undefined ? {} : { env: this.options.env }),
+      })
+    }
+    return this.apiScorer
+  }
+
+  private disposeApiScorer(): void {
+    this.apiScorer = undefined
+  }
+
   /** 重新读取设置并重建映射（settings 变更后下一轮生效）。 */
   async reload(): Promise<void> {
     this.initialized = false
@@ -539,6 +714,8 @@ export class EmotionModelService {
     this.ready = 'idle'
     this.readyPromise = undefined
     this.runtimeError = null
+    this.providerStatus = { ready: true, error: null }
+    this.disposeApiScorer()
     this.settingsState = DEFAULT_SETTINGS
     await this.initialize()
     await this.refreshRuntime()
@@ -553,6 +730,8 @@ export class EmotionModelService {
     this.initPromise = undefined
     this.ready = 'idle'
     this.readyPromise = undefined
+    this.providerStatus = { ready: true, error: null }
+    this.disposeApiScorer()
     if (scorer !== undefined) await scorer.dispose()
   }
 

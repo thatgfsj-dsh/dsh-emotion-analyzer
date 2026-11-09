@@ -5,9 +5,12 @@
   │  agent/turn-stopping { agent, turn, signal }   （DSH 0.2.2-rc.1 实际事件名）
   ▼
 EmotionModelService.score(text)      src/models/service.ts
-  │  settings(activeModelId) → registry preset → manager 下载目录 / legacy assets
-  │  EmotionScorer(modelPath, tokenizerPath, labels)  src/inference.ts
-  │  onnxruntime-node + INT8 ONNX；N 个原始标签逐元素 sigmoid
+  │  provider = local（默认）| api（#41，opt-in）
+  │  ├─ local：settings(activeModelId) → registry preset → manager 下载目录 / legacy assets
+  │  │    EmotionScorer(modelPath, tokenizerPath, labels)  src/inference.ts
+  │  │    onnxruntime-node + INT8 ONNX；N 个原始标签逐元素 sigmoid
+  │  └─ api：ApiScorer → POST {baseUrl}/chat/completions → 严格 JSON 7 维分数  src/models/api-scorer.ts
+  │       失败（超时/HTTP/JSON/密钥）→ 回退 local
   ▼
 profile.updateProjection(current, raw)   src/models/profiles.ts → src/mapping.ts
   │  按模型 profile（legacy-11 / go-emotions-28 / zh-8）聚合 7 维
@@ -28,6 +31,9 @@ shell.overlay 浮层 → React portal → <emotion-monitor>（Shadow DOM）
 模型管理旁路：`GET/POST /api/emotion-analyzer/v1/*`（`src/models/routes.ts`）→ `EmotionModelService` →
 `ModelManager`（下载/校验/删除）与 `settings.ts`（`$DSH_HOME/emotion-analyzer/config.json`）。
 
+> **打分通道（0.2.5 / #41）**：默认本地 ONNX；API 通道直出 7 维（`unified-7` profile），
+> 失败回退本地并记录 `providerStatus.error`。密钥只从环境变量读取。
+>
 > **0.2.2 适配要点**：`apply` 是 async 并 `await` projection 注册（`register()` 返回 Promise）；
 > `appendPluginRecord` 必须用宿主那一份 `@deepseek-ai/dsh-session`（品牌检查），解析策略见
 > [校准文档](calibration.md#第三方插件的宿主模块解析022-实测阻断级)。
@@ -40,7 +46,8 @@ shell.overlay 浮层 → React portal → <emotion-monitor>（Shadow DOM）
 | `src/models/registry.ts` | 模型预设静态数据（许可/体积/标签/URL） | < 300 |
 | `src/models/profiles.ts` | 标签 → 7 维映射 profile（28/11/8） | < 300 |
 | `src/models/manager.ts` | 模型下载 / 校验 / 取消 / 删除 | < 400 |
-| `src/models/service.ts` | 激活模型解析、回退、打分、切换 | < 420 |
+| `src/models/service.ts` | 激活模型解析、回退、打分、provider 切换 | < 800 |
+| `src/models/api-scorer.ts` | OpenAI-compatible 打分通道（提示词/请求/严格解析/超时） | < 300 |
 | `src/models/routes.ts` | Host API `/api/emotion-analyzer/v1/*` | < 250 |
 | `src/settings.ts` | `$DSH_HOME/emotion-analyzer/config.json` 原子读写 | < 200 |
 | `src/inference.ts` | ONNX 会话、分词、sigmoid、计时/降级 | < 450 |
@@ -49,6 +56,7 @@ shell.overlay 浮层 → React portal → <emotion-monitor>（Shadow DOM）
 | `src/index.ts` | 插件入口、turn-stopping 钩子、路由注册 | < 300 |
 | `src/widget/*` | Shadow DOM 悬浮框、sparkline、样式 | 每文件 < 700 |
 | `src/client/index.ts` | shell.overlay + 隐形桥 + portal | < 300 |
+| `src/client/settings-provider.ts` | 设置页「打分通道」卡片与表单校验 | < 350 |
 
 ## 情绪映射与累积（`src/mapping.ts` + `src/models/profiles.ts`）
 
