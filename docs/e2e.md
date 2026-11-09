@@ -66,7 +66,24 @@ CDP 断言（真实页面）：
 
 结论：0.2.2-rc.1 上「回复 → 本地打分 → 写 plugin record → projection 折叠」链路打通；此前记录的阻断级风险（插件本地 `dsh-session` 副本导致 `TypeError: Receiver must be an instance of class Session`）已由 `src/host-modules.ts` 的宿主解析修复。
 
+## 0.2.5 自定义 API 通道验证（2026-11-10）
+
+> 环境：Linux x86_64 / Node 24.21 / DSH 0.2.2-rc.1。**没有调用任何真实第三方 API**：用本机回环 HTTP server 验证真实 fetch 路径。
+
+| 验收项 | 结果 | 证据 |
+|---|---|---|
+| 请求构造 | ✅ URL=`{baseUrl}/chat/completions`、`model`、`temperature:0`、`Authorization: Bearer`、7 维提示词 | `tests/api-scorer.test.ts`（回环 server 断言 path/header/body） |
+| 严格 JSON 解析 | ✅ 围栏/前后文字容忍；未知键丢弃；缺失补 0；越界/非数字/空对象判非法 | `parseScoreContent` 单测 |
+| 超时降级 | ✅ `AbortSignal.timeout` → `timeout`，service 回退本地并标记 `fallbackActive` | 回环 server 延迟响应 + `tests/models-service.test.ts` |
+| HTTP / JSON / 密钥缺失 | ✅ `http_error` / `invalid_response` / `missing_api_key`；密钥缺失不发请求 | 同上 |
+| 通道切换 | ✅ `POST /provider` 校验+持久化；非法配置 `invalid_provider` 400 | `tests/models-routes.test.ts`、`tests/models-service.test.ts` |
+| 默认安全 | ✅ 默认 provider=local；损坏的 API 配置规范化为 local | `tests/settings.test.ts` |
+| projection 兼容 | ✅ API 记录 `profileId: 'unified-7'`（identity），重放不需要网络 | `tests/models-profiles.test.ts` |
+
+未验证：真实第三方 API 的端到端（需要用户自备端点与密钥；本机只用回环 server 验证协议路径）。
+
 ## 未验证 / 已知限制
+
 
 - **UI 端真实模型数据**：完整 turn 已在 headless profile 验证（见上节），但 Web 页面在「真实 turn 数据」下的悬浮框截图尚未复跑；UI 行为以隔离页面 CDP 断言为准。
 - Node 22 / Windows / macOS 下的 `onnxruntime-node`、`tokenizers` 安装未在本机复跑（仅 Linux + Node 24）。

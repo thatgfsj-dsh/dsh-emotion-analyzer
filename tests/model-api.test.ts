@@ -17,6 +17,7 @@ import {
   normalizeDownload,
   normalizeModelState,
   normalizePreset,
+  normalizeProvider,
   normalizeTestResult,
   shouldPollModelState,
 } from '../src/client/model-api.ts'
@@ -366,4 +367,55 @@ test('live mode surfaces server errors', async () => {
     assert.equal(error.message, 'download busy')
     return true
   })
+})
+
+
+test('normalizeProvider: local / api + providerStatus', () => {
+  assert.deepEqual(normalizeProvider(undefined, undefined), { type: 'local', ready: true, error: null })
+  assert.deepEqual(normalizeProvider({ type: 'local' }, { ready: true, error: null }), {
+    type: 'local',
+    ready: true,
+    error: null,
+  })
+  assert.deepEqual(
+    normalizeProvider(
+      { type: 'api', baseUrl: 'https://api.example.com/v1', model: 'gpt-4o-mini', apiKeyEnv: 'EMO_KEY', timeoutMs: 5000 },
+      { ready: false, error: '环境变量 EMO_KEY 未设置' },
+    ),
+    {
+      type: 'api',
+      baseUrl: 'https://api.example.com/v1',
+      model: 'gpt-4o-mini',
+      apiKeyEnv: 'EMO_KEY',
+      timeoutMs: 5000,
+      ready: false,
+      error: '环境变量 EMO_KEY 未设置',
+    },
+  )
+  // /state 里 provider 缺失时按 local 处理
+  const state = normalizeModelState({ activeModelId: 'horizon-small', models: [] })
+  assert.equal(state.provider.type, 'local')
+})
+
+test('saveProvider (mock): 切换 API / 本地 + 非法配置报错', async () => {
+  const api = createModelApi({ mode: 'mock' })
+  const apiState = await api.saveProvider({ type: 'api', baseUrl: 'https://api.example.com/v1/', model: 'gpt-4o-mini', apiKeyEnv: 'EMO_KEY' })
+  assert.equal(apiState.provider.type, 'api')
+  if (apiState.provider.type === 'api') {
+    assert.equal(apiState.provider.baseUrl, 'https://api.example.com/v1')
+    assert.equal(apiState.provider.model, 'gpt-4o-mini')
+    assert.equal(apiState.provider.apiKeyEnv, 'EMO_KEY')
+    assert.equal(apiState.provider.ready, true)
+  }
+  const localState = await api.saveProvider({ type: 'local' })
+  assert.equal(localState.provider.type, 'local')
+
+  await assert.rejects(
+    () => api.saveProvider({ type: 'api', baseUrl: 'ftp://x', model: 'm' }),
+    (error: unknown) => {
+      assert.ok(error instanceof ModelApiError)
+      assert.equal(error.code, 'invalid-provider')
+      return true
+    },
+  )
 })

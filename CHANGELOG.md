@@ -7,6 +7,26 @@ uses [Semantic Versioning](https://semver.org/).
 > 版本历史说明：`v0.2.2-fix`（2026-10-26）晚于 `v0.2.3`（2026-10-25）发布但版本号更小，属历史遗留；
 > 自 `0.2.4` 起 tag 与 `package.json` 版本一一对应。
 
+## [0.2.5] - 2026-11-10
+
+### Added（#41 自定义 API 通道）
+
+- OpenAI-compatible chat 打分通道（**opt-in**）：`POST {baseUrl}/chat/completions`，要求严格 JSON 7 维分数；支持 `baseUrl / model / apiKeyEnv / timeoutMs`，密钥只从环境变量读取、不落盘。
+- 新增 `unified-7` 映射 profile（7 维 identity）：API 记录带 `profileId: 'unified-7'`，projection 重放不依赖网络。
+- Host API 新增 `POST /provider`；`GET /state` 增加 `provider` 与 `providerStatus`。
+- 设置页新增「打分通道」卡片：本地 ONNX / 自定义 API 单选、字段校验、状态提示、隐私/成本说明。
+
+### Changed
+
+- `EmotionModelService` 变为 provider 感知：API 失败（超时 / HTTP / JSON 非法 / 密钥缺失）自动回退本地并标记 `fallbackActive`；`POST /test` 对 API 失败返回 502 `api_failed`。
+- `ProviderSettings` 扩展为 `local | api` 联合；配置文件里损坏的 API 配置规范化为 `local`（安全默认）。
+- 文档：`docs/models.md` §9、README「打分通道」、architecture / e2e / calibration 同步。
+
+### Verified
+
+- `npm run check`：179 tests / 178 pass / 1 skip / 0 fail；`npm run build` 通过。
+- 本机回环 HTTP server 实测：成功 / 超时 / HTTP 500 / 非法 JSON / 密钥缺失 5 类路径；**未调用真实第三方 API**。
+
 ## [0.2.4] - 2026-11-10
 
 ### Changed（适配 DSH 0.2.2-rc.1，#70）

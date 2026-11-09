@@ -1,6 +1,6 @@
 {
   "name": "dsh-emotion-analyzer",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "DSH 情绪分析器：本地 ONNX 推理为每条主模型回复打分，投影进会话状态，并在 DSH 网站注入可拖拽的悬浮情绪监测框。",
   "type": "module",
   "main": "lib/index.js",

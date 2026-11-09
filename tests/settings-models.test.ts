@@ -48,6 +48,7 @@ function state(overrides: Partial<ModelState> = {}): ModelState {
     fallback: false,
     warnings: [],
     source: 'live',
+    provider: { type: 'local', ready: true, error: null },
     ...overrides,
   }
 }
