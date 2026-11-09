@@ -11,11 +11,107 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DEFAULT_MODEL_ID } from './models/registry.ts'
 
-/** 当前 provider 形态（v0.2 只有本地 ONNX；自定义 API 见后续 issue）。 */
-export interface ProviderSettings {
+/** 本地 ONNX 打分通道（默认）。 */
+export interface LocalProviderSettings {
   readonly type: 'local'
-  /** 预留：自定义 API 的密钥环境变量名（v0.2 不读取）。 */
+  /** @deprecated v0.2 预留字段，保留兼容读取；本地通道不使用。 */
   readonly apiKeyEnv?: string
+}
+
+/** OpenAI-compatible chat 打分通道（#41）。 */
+export interface ApiProviderSettings {
+  readonly type: 'api'
+  /** API 根地址，例如 `https://api.example.com/v1`（不含 `/chat/completions`）。 */
+  readonly baseUrl: string
+  /** 模型名，原样放进请求体。 */
+  readonly model: string
+  /** 读取密钥的环境变量名；不落盘密钥本身。 */
+  readonly apiKeyEnv?: string
+  /** 单次请求超时（毫秒），1000–60000，默认 8000。 */
+  readonly timeoutMs?: number
+}
+
+/** 当前 provider 形态：本地 ONNX 或自定义 API。 */
+export type ProviderSettings = LocalProviderSettings | ApiProviderSettings
+
+/** API 通道默认 / 边界超时。 */
+export const DEFAULT_API_TIMEOUT_MS = 8000
+export const MIN_API_TIMEOUT_MS = 1000
+export const MAX_API_TIMEOUT_MS = 60_000
+
+/** 环境变量名允许的字符集（不读取值）。 */
+const API_KEY_ENV_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u
+
+/** 校验并规范化 API provider 配置。 */
+export function validateApiProvider(value: unknown): { settings?: ApiProviderSettings; error?: string } {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return { error: 'provider 必须是 JSON 对象' }
+  }
+  const record = value as Record<string, unknown>
+  const rawBaseUrl = record['baseUrl']
+  if (typeof rawBaseUrl !== 'string' || rawBaseUrl.trim().length === 0) {
+    return { error: 'API 模式需要 baseUrl' }
+  }
+  const baseUrl = rawBaseUrl.trim().replace(/\/+$/u, '')
+  let parsed: URL
+  try {
+    parsed = new URL(baseUrl)
+  } catch {
+    return { error: 'baseUrl 不是合法 URL' }
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { error: 'baseUrl 只支持 http/https' }
+  }
+  const rawModel = record['model']
+  if (typeof rawModel !== 'string' || rawModel.trim().length === 0) {
+    return { error: 'API 模式需要 model' }
+  }
+  const model = rawModel.trim()
+  if (model.length > 200) return { error: 'model 名称过长（>200）' }
+
+  let apiKeyEnv: string | undefined
+  const rawKeyEnv = record['apiKeyEnv']
+  if (rawKeyEnv !== undefined && rawKeyEnv !== null && rawKeyEnv !== '') {
+    if (typeof rawKeyEnv !== 'string' || !API_KEY_ENV_RE.test(rawKeyEnv.trim())) {
+      return { error: 'apiKeyEnv 必须是合法的环境变量名' }
+    }
+    apiKeyEnv = rawKeyEnv.trim()
+  }
+
+  let timeoutMs: number | undefined
+  const rawTimeout = record['timeoutMs']
+  if (rawTimeout !== undefined && rawTimeout !== null) {
+    if (typeof rawTimeout !== 'number' || !Number.isFinite(rawTimeout)) {
+      return { error: 'timeoutMs 必须是数字' }
+    }
+    timeoutMs = Math.min(MAX_API_TIMEOUT_MS, Math.max(MIN_API_TIMEOUT_MS, Math.round(rawTimeout)))
+  }
+
+  return {
+    settings: {
+      type: 'api',
+      baseUrl,
+      model,
+      ...(apiKeyEnv === undefined ? {} : { apiKeyEnv }),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    },
+  }
+}
+
+/**
+ * 读取 API 密钥：只从环境变量取，不落盘。
+ * @param provider - API provider 配置。
+ * @param env - 环境变量表（测试可注入）。
+ * @returns 密钥值；未配置 apiKeyEnv 或变量为空时 undefined。
+ */
+export function apiKeyOf(
+  provider: ApiProviderSettings,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  if (provider.apiKeyEnv === undefined) return undefined
+  const value = env[provider.apiKeyEnv]
+  if (typeof value !== 'string' || value.trim().length === 0) return undefined
+  return value.trim()
 }
 
 /** 插件设置。 */
@@ -79,16 +175,21 @@ export function normalizeSettings(raw: unknown): PluginSettings {
     rawProvider !== null && typeof rawProvider === 'object' && !Array.isArray(rawProvider)
       ? (rawProvider as Record<string, unknown>)
       : {}
-  // v0.2 只支持 local；未来自定义 API 的配置也会走这里做兼容读取。
-  const apiKeyEnv =
-    typeof providerRecord['apiKeyEnv'] === 'string' && providerRecord['apiKeyEnv'].trim().length > 0
-      ? providerRecord['apiKeyEnv'].trim()
-      : undefined
 
-  return {
-    activeModelId,
-    provider: apiKeyEnv === undefined ? { type: 'local' } : { type: 'local', apiKeyEnv },
+  let provider: ProviderSettings = { type: 'local' }
+  if (providerRecord['type'] === 'api') {
+    // 非法 API 配置回退本地（安全默认）：不让一个坏配置把插件锁死。
+    const validated = validateApiProvider(providerRecord)
+    provider = validated.settings ?? { type: 'local' }
+  } else {
+    const apiKeyEnv =
+      typeof providerRecord['apiKeyEnv'] === 'string' && providerRecord['apiKeyEnv'].trim().length > 0
+        ? providerRecord['apiKeyEnv'].trim()
+        : undefined
+    provider = apiKeyEnv === undefined ? { type: 'local' } : { type: 'local', apiKeyEnv }
   }
+
+  return { activeModelId, provider }
 }
 
 /**

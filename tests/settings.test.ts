@@ -9,6 +9,7 @@ import test from 'node:test'
 
 import {
   DEFAULT_SETTINGS,
+  apiKeyOf,
   dshHome,
   loadSettings,
   modelsDir,
@@ -104,4 +105,44 @@ test('JSON 损坏时回退默认值并 warning', async () => {
   } finally {
     await rm(base, { recursive: true, force: true })
   }
+})
+
+
+test('provider 规范化：API 配置、非法回退本地、timeout 钳制', () => {
+  const api = normalizeSettings({
+    provider: {
+      type: 'api',
+      baseUrl: 'https://api.example.com/v1/',
+      model: ' gpt-4o-mini ',
+      apiKeyEnv: 'EMO_API_KEY',
+      timeoutMs: 50,
+    },
+  })
+  assert.deepEqual(api.provider, {
+    type: 'api',
+    baseUrl: 'https://api.example.com/v1',
+    model: 'gpt-4o-mini',
+    apiKeyEnv: 'EMO_API_KEY',
+    timeoutMs: 1000,
+  })
+  const upper = normalizeSettings({
+    provider: { type: 'api', baseUrl: 'https://api.example.com/v1', model: 'm', timeoutMs: 999_999 },
+  })
+  assert.equal(upper.provider.type, 'api')
+  assert.equal(upper.provider.type === 'api' ? upper.provider.timeoutMs : undefined, 60_000)
+  // 非法配置回退 local（安全默认）
+  assert.deepEqual(normalizeSettings({ provider: { type: 'api', baseUrl: 'ftp://x', model: 'm' } }).provider, { type: 'local' })
+  assert.deepEqual(normalizeSettings({ provider: { type: 'api', baseUrl: 'https://x' } }).provider, { type: 'local' })
+  assert.deepEqual(
+    normalizeSettings({ provider: { type: 'api', baseUrl: 'https://x', model: 'm', apiKeyEnv: 'not a name' } }).provider,
+    { type: 'local' },
+  )
+})
+
+test('apiKeyOf 只从环境变量读取，不落盘', () => {
+  const provider = { type: 'api' as const, baseUrl: 'https://x/v1', model: 'm', apiKeyEnv: 'EMO_KEY' }
+  assert.equal(apiKeyOf(provider, { EMO_KEY: 'sk-1' }), 'sk-1')
+  assert.equal(apiKeyOf(provider, { EMO_KEY: '   ' }), undefined)
+  assert.equal(apiKeyOf(provider, {}), undefined)
+  assert.equal(apiKeyOf({ type: 'api', baseUrl: 'https://x/v1', model: 'm' }, {}), undefined)
 })

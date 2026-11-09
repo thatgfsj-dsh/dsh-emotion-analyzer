@@ -13,6 +13,7 @@ import {
   getMappingProfile,
   isMappingProfileId,
   termsOf,
+  type MappingProfileId,
 } from '../src/models/profiles.ts'
 import { EMOTION_DIMENSIONS, RAW_EMOTION_LABELS, emptyProjection, type EmotionScores } from '../src/mapping.ts'
 
@@ -21,7 +22,7 @@ function close(actual: number, expected: number, epsilon = 1e-9): void {
 }
 
 /** 每个标签单独输入时，至少点亮一个统一维度。 */
-function everyLabelHasHome(profileId: 'legacy-11' | 'go-emotions-28' | 'zh-8'): void {
+function everyLabelHasHome(profileId: MappingProfileId): void {
   const profile = MAPPING_PROFILES[profileId]
   for (const label of profile.labels) {
     const scores = profile.aggregate({ [label]: 1 })
@@ -30,11 +31,12 @@ function everyLabelHasHome(profileId: 'legacy-11' | 'go-emotions-28' | 'zh-8'): 
   }
 }
 
-test('profile 注册表：三个 profile、标签顺序与 lib 常量一致', () => {
-  assert.deepEqual([...MAPPING_PROFILE_IDS], ['legacy-11', 'go-emotions-28', 'zh-8'])
+test('profile 注册表：四个 profile、标签顺序与 lib 常量一致', () => {
+  assert.deepEqual([...MAPPING_PROFILE_IDS], ['legacy-11', 'go-emotions-28', 'zh-8', 'unified-7'])
   assert.deepEqual(MAPPING_PROFILES['legacy-11'].labels, [...RAW_EMOTION_LABELS])
   assert.deepEqual(MAPPING_PROFILES['go-emotions-28'].labels, [...GO_EMOTION_LABELS])
   assert.deepEqual(MAPPING_PROFILES['zh-8'].labels, [...ZH_EMOTION_LABELS])
+  assert.deepEqual(MAPPING_PROFILES['unified-7'].labels, ['pleasant', 'sad', 'angry', 'anxious', 'unwell', 'confused', 'neutral'])
   assert.equal(GO_EMOTION_LABELS.length, 28)
   assert.equal(ZH_EMOTION_LABELS.length, 8)
   assert.equal(ZH_LABEL_NAMES['LABEL_2'], '开心')
@@ -53,6 +55,7 @@ test('所有 profile 的每个标签都有归属', () => {
   everyLabelHasHome('legacy-11')
   everyLabelHasHome('go-emotions-28')
   everyLabelHasHome('zh-8')
+  everyLabelHasHome('unified-7')
 })
 
 test('go-emotions-28 分组：pleasant/sad/angry/anxious/unwell/confused/neutral', () => {
@@ -108,9 +111,11 @@ function zhProjectionHasEffect(label: string): boolean {
   return EMOTION_DIMENSIONS.some((dimension) => (next[dimension] as number) > 0)
 }
 
-test('doubt 派生信号进入所有 profile 的 confused 维度', () => {
-  for (const id of MAPPING_PROFILE_IDS) {
+test('doubt 派生信号进入模型 profile 的 confused 维度（unified-7 直出 7 维，无 doubt）', () => {
+  for (const id of ['legacy-11', 'go-emotions-28', 'zh-8'] as const) {
     const profile = MAPPING_PROFILES[id]
     close(profile.aggregate({ doubt: 0.5 }).confused, 0.5)
   }
+  // unified-7 是 identity 映射：doubt 不属于 7 维，必须被忽略。
+  close(MAPPING_PROFILES['unified-7'].aggregate({ doubt: 0.5 }).confused, 0)
 })

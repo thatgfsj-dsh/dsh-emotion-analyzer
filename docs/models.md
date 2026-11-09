@@ -37,7 +37,8 @@ $DSH_HOME/emotion-analyzer/                 # DSH_HOME 未设置时回退 ~/.dsh
 ```json
 {
   "activeModelId": "horizon-small",
-  "provider": { "type": "local" }
+  "provider": { "type": "local" },
+  "providerStatus": { "ready": true, "error": null }
 }
 ```
 
@@ -64,7 +65,7 @@ $DSH_HOME/emotion-analyzer/                 # DSH_HOME 未设置时回退 ~/.dsh
 - **删除**：只允许删非 legacy；删除当前激活模型后会回退 legacy。
 - **不提交权重**：模型目录位于 `$DSH_HOME`，仓库 `assets/` 只有 legacy 导出产物且被 `.gitignore` 忽略。
 
-## 5. 映射 profile（28 / 11 / 8 标签 → 7 维）
+## 5. 映射 profile（28 / 11 / 8 标签 / 7 维直出 → 7 维）
 
 实现：`src/models/profiles.ts`（纯数据 + 纯函数，projection 重放只依赖 `profileId`）。
 统一维度固定为：`pleasant / sad / angry / anxious / unwell / confused / neutral`。
@@ -104,6 +105,12 @@ $DSH_HOME/emotion-analyzer/                 # DSH_HOME 未设置时回退 ~/.dsh
 
 `doubt` 同样并入 confused。该预设当前 **manual/experimental**：不提供在线下载；用户自行导出 `model.onnx`（deberta-v2 tokenizer）并与 tokenizer/config 一起放入 `$DSH_HOME/emotion-analyzer/models/zh-johnson-small/` 后即可在设置页选择。
 
+### 5.4 `unified-7`（自定义 API 直出，#41）
+
+API 通道让第三方模型直接输出 7 个统一维度分数，因此该 profile 是 **identity 映射**：
+每个维度只由同名标签驱动，`doubt` 等派生信号不参与（API 输出里出现也会被丢弃）。
+记录带 `profileId: 'unified-7'`，projection 重放不访问网络，切换通道不影响历史轮次。
+
 ## 6. Host API（`/api/emotion-analyzer/v1`）
 
 路由通过 `ctx.connection.fetch.register` 注册在 Connection 的鉴权栅栏内：只有 owner Peer 能访问，其他 principal 由 Host 返回 403；本插件不自行解析 token。
@@ -114,7 +121,8 @@ $DSH_HOME/emotion-analyzer/                 # DSH_HOME 未设置时回退 ~/.dsh
 | POST | `/model/select` | `{ "id": "<preset-id>" }` | `ModelStatePayload` |
 | POST | `/model/download` | `{ "id": "<preset-id>" }` | `202` + `ModelStatePayload`（立即返回，进度轮询 state） |
 | DELETE | `/model/{id}` | — | `ModelStatePayload` |
-| POST | `/test` | `{ "text": "..." }` | `{ scores, modelId, latencyMs }`（scores 为 7 维统一分数） |
+| POST | `/provider` | `{ "type": "local" }` 或 `{ "type": "api", "baseUrl", "model", "apiKeyEnv?", "timeoutMs?" }` | `ModelStatePayload` |
+| POST | `/test` | `{ "text": "..." }` | `{ scores, modelId, latencyMs }`（scores 为 7 维统一分数；API 模式走 API） |
 
 `ModelStatePayload`：
 
@@ -134,7 +142,7 @@ $DSH_HOME/emotion-analyzer/                 # DSH_HOME 未设置时回退 ~/.dsh
 ```
 
 错误统一为 `{ "error": { "code": "...", "message": "..." } }`。
-常见 code：`invalid_body`、`unknown_model`、`not_downloaded`、`needs_export`、`legacy_protected`、`model_unavailable`、`inference_failed`、`internal`。
+常见 code：`invalid_body`、`unknown_model`、`not_downloaded`、`needs_export`、`legacy_protected`、`model_unavailable`、`inference_failed`、`invalid_provider`、`provider_unavailable`、`api_failed`、`internal`。
 
 > 路由注册限制：Connection exact Fetch route 以完整 pathname 匹配、不支持 `:id` 参数，因此 DELETE 按 4 个预设 id 预注册；新增预设时要同步注册（`src/models/routes.ts` 遍历 `MODEL_PRESET_IDS`）。
 
@@ -167,3 +175,30 @@ DSH_EMOTION_HORIZON_DIR=<任意目录>/horizon-small node --test tests/models-ac
 - **完整性**：当前只校验“存在 + 字节数”，未做 sha256；后续 issue 可加 checksum/manifest。
 - **DELETE 方法**：Connection 的 `ConnectionFetchMethod` 类型只声明 GET/HEAD/POST；本实现按契约注册 DELETE，运行时 Host 只校验 path/method 唯一性。若某版 Host 在 HTTP 桥拒收 DELETE，需要退回 POST 变体（风险待真实页面验证）。
 - **许可**：默认 Horizon 为 Apache-2.0；legacy 仍为 CC-BY-NC-4.0（非商业），仅作回退资产，商用请使用默认模型或自行替换。
+
+
+## 9. 自定义 OpenAI-compatible API（#41）
+
+默认通道仍是本地 ONNX。设置页「打分通道」可切到第三方 API（**opt-in**）：
+
+```json
+{
+  "activeModelId": "horizon-small",
+  "provider": {
+    "type": "api",
+    "baseUrl": "https://api.example.com/v1",
+    "model": "gpt-4o-mini",
+    "apiKeyEnv": "EMOTION_API_KEY",
+    "timeoutMs": 8000
+  }
+}
+```
+
+- 请求：`POST {baseUrl}/chat/completions`（OpenAI chat 协议），`temperature: 0`，要求模型只输出 7 维严格 JSON。
+- 解析：容忍 ```json 围栏/前后文字；出现的维度必须是 0–1 有限数字，否则整体判非法；未知键丢弃、缺失维度按 0。
+- 降级：超时（默认 8s）/ HTTP 非 2xx / JSON 非法 / 密钥缺失 → 回退本地 ONNX（若可用），`fallbackActive=true`，
+  `providerStatus.error` 暴露原因；本地也不可用则本轮跳过。
+- 密钥：只从 `apiKeyEnv` 指向的**环境变量**读取，配置文件只存变量名，不落盘密钥。
+- 成本：`POST /test` 与每轮打分都会调用 API，按对方价格计费；发送内容为**助手回复文本**（截断 4000 字符），不含用户输入、会话 id 或密钥。
+- 映射：API 记录用 `unified-7` profile，projection 重放不依赖网络。
+- 非法配置（URL/模型名/超时/环境变量名）在保存时被拒绝；配置文件里损坏的 API 配置会被规范化为 `local`（安全默认），不会把插件锁死。
