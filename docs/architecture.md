@@ -2,7 +2,7 @@
 
 ```
 主模型回复完成
-  │  agent/turn-stopping { agent, turn, signal }   （DSH 0.2.1-rc.2 实际事件名）
+  │  agent/turn-stopping { agent, turn, signal }   （DSH 0.2.2-rc.1 实际事件名）
   ▼
 EmotionModelService.score(text)      src/models/service.ts
   │  settings(activeModelId) → registry preset → manager 下载目录 / legacy assets
@@ -14,9 +14,10 @@ profile.updateProjection(current, raw)   src/models/profiles.ts → src/mapping.
   │  阈值过滤 + 衰减 + 步长 + 封顶
   ▼
 appendPluginRecord(session, 'plugin:emotion-analyzer/turn', v2 data with modelId/profileId)
+  │  src/host-modules.ts：从运行中的 dsh 安装解析宿主 dsh-session（品牌检查）
   │  ignorable 会话事件 → 持久化 / 重启恢复 / fork 携带
   ▼
-ctx.sessionProjections.register({ key: 'emotion', ... })   src/projection.ts
+await ctx.sessionProjections.register({ key: 'emotion', ... })   src/projection.ts
   │  纯同步 fold（按记录自带 profileId 重放）；wire view 推送给 Web 客户端
   ▼
 客户端隐形桥 useProjection('emotion') → 模块级 store
@@ -26,6 +27,10 @@ shell.overlay 浮层 → React portal → <emotion-monitor>（Shadow DOM）
 
 模型管理旁路：`GET/POST /api/emotion-analyzer/v1/*`（`src/models/routes.ts`）→ `EmotionModelService` →
 `ModelManager`（下载/校验/删除）与 `settings.ts`（`$DSH_HOME/emotion-analyzer/config.json`）。
+
+> **0.2.2 适配要点**：`apply` 是 async 并 `await` projection 注册（`register()` 返回 Promise）；
+> `appendPluginRecord` 必须用宿主那一份 `@deepseek-ai/dsh-session`（品牌检查），解析策略见
+> [校准文档](calibration.md#第三方插件的宿主模块解析022-实测阻断级)。
 
 ## 模块边界
 
@@ -40,7 +45,8 @@ shell.overlay 浮层 → React portal → <emotion-monitor>（Shadow DOM）
 | `src/settings.ts` | `$DSH_HOME/emotion-analyzer/config.json` 原子读写 | < 200 |
 | `src/inference.ts` | ONNX 会话、分词、sigmoid、计时/降级 | < 450 |
 | `src/projection.ts` | projection 单元定义与 schema | < 250 |
-| `src/index.ts` | 插件入口、turn-stopping 钩子、路由注册 | < 250 |
+| `src/host-modules.ts` | 宿主 `dsh-session` 模块解析（0.2.2 品牌检查） | < 150 |
+| `src/index.ts` | 插件入口、turn-stopping 钩子、路由注册 | < 300 |
 | `src/widget/*` | Shadow DOM 悬浮框、sparkline、样式 | 每文件 < 700 |
 | `src/client/index.ts` | shell.overlay + 隐形桥 + portal | < 300 |
 

@@ -1,6 +1,7 @@
 # 端到端与验收记录
 
-> 环境：Linux（x86_64，i5-1240P，16 GB），Node 24.21，Python 3.13.5，DSH 0.2.1-rc.2，CPU INT8。
+> 环境：Linux（x86_64，i5-1240P，16 GB），Node 24.21，Python 3.13.5，CPU INT8。
+> 历史行在 DSH 0.2.1-rc.2 上测得；0.2.2-rc.1 适配复测见「0.2.2-rc.1 适配验证」一节。
 > 原则：只记录实际跑过的结果；未跑过的项明确标注。
 
 ## 验收矩阵
@@ -18,7 +19,7 @@
 | Shadow DOM 隔离 | ✅ 恶意宿主 CSS demo + 真实页面 shadowRoot | `demo/index.html`、本页截图 |
 | DSH 真实页面加载无 slot crash | ✅ 无 console error；元素正常升级 | 本页截图 + #20 |
 | Host 插件真实加载 | ✅ `dsh --profile emo-test --help` EXIT 0；`import('dsh-emotion-analyzer')` 成功 | #17/#18 |
-| 真实模型完整 turn（回复→打分→投影→UI） | ⚠️ **未在本机复跑**：本机 web 进程没有可用的 API key/账号路由（headless profile 报 `MISSING_CREDENTIAL`）。各段分别验证：推理真实模型测试、appendPluginRecord/投影 fold 回归、客户端 store 单测、真实页面挂载。 | 见下节 |
+| 真实模型完整 turn（回复→打分→投影→UI） | ✅ **0.2.2-rc.1 上已复跑**（2026-11-10）：headless profile + `--patch` 注入插件，真实 LLM 一轮 → 写入 v2 plugin record → projection 折叠成功；见下节「0.2.2-rc.1 适配验证」。UI 端仍以隔离页面 CDP 断言为准。 | 见下节 |
 
 ## 真实页面（隔离 profile + 合成会话日志）
 
@@ -40,9 +41,34 @@ CDP 断言（真实页面）：
 | hover 徽章 | 不展开（#31 移除 hover 预览） |
 | 页面 console | 修复 #20 后 0 个异常 |
 
+## 0.2.2-rc.1 适配验证（2026-11-10）
+
+> 环境：Linux x86_64 / Node 24.21 / **DSH 0.2.2-rc.1** / CPU INT8。验证后已清理测试会话与临时文件。
+
+| 验收项 | 结果 | 证据 |
+|---|---|---|
+| `npm run check`（typecheck + 158 tests） | ✅ 157 pass / 1 skip / 0 fail（skip = 需 `DSH_EMOTION_HORIZON_DIR` 的精度回归） | 本机运行输出 |
+| `npm run build` | ✅ | esbuild 输出 |
+| 隐私检查 | ✅ 无本机路径 | `scripts/check-privacy.sh` |
+| `--patch` 冒烟（真实插件行插入 web profile） | ✅ `apply` 执行、无报错、进程正常退出 | `dsh --profile web --patch <overlay> --help` |
+| 宿主模块解析 | ✅ 解析到 `~/.npm-global/.../@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session/lib/index.js`（宿主副本），不是插件本地副本 | 探针插件打印 + `createRequire(realpath(process.argv[1]))` |
+| 宿主 Session 写入 | ✅ `createAppendRecord` 在真实 dsh 进程内 append 成功（seq=0，事件 1 条） | 探针插件输出 |
+| **真实模型完整 turn** | ✅ 两次真实 turn 均写入成功（latencyMs 20 / 17） | headless profile + `--patch`（插件行 + 用户 LLM provider 配置） |
+| projection 折叠 | ✅ `stateVersion 4 / turn 1 / dominant pleasant`，`pleasant 0.356 > neutral 0.324`，`latencyMs 17–20`，`language zh` | 会话 projection 缓存（验证后已清理） |
+
+真实 turn 的 plugin record（会话日志原文摘要）：
+
+```json
+{"type":"plugin:emotion-analyzer/turn","ignorable":true,
+ "data":{"version":2,"turn":1,"modelId":"horizon-small","profileId":"go-emotions-28",
+         "latencyMs":17,"language":"zh","chars":20}}
+```
+
+结论：0.2.2-rc.1 上「回复 → 本地打分 → 写 plugin record → projection 折叠」链路打通；此前记录的阻断级风险（插件本地 `dsh-session` 副本导致 `TypeError: Receiver must be an instance of class Session`）已由 `src/host-modules.ts` 的宿主解析修复。
+
 ## 未验证 / 已知限制
 
-- 真实模型 turn 的端到端（需要用户配置可用的模型路由；本机测试环境无 API key）。
+- **UI 端真实模型数据**：完整 turn 已在 headless profile 验证（见上节），但 Web 页面在「真实 turn 数据」下的悬浮框截图尚未复跑；UI 行为以隔离页面 CDP 断言为准。
 - Node 22 / Windows / macOS 下的 `onnxruntime-node`、`tokenizers` 安装未在本机复跑（仅 Linux + Node 24）。
 - DSH 设置页的开关行只做了代码路径与注册验证，未在真实页面打开 Settings 截图。
 - 多标签页、prefers-reduced-motion、隐私模式 localStorage 降级：代码已处理，未逐项截图。

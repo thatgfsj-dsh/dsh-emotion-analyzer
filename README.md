@@ -2,7 +2,7 @@
 
 > DSH（DeepSeek Harness）情绪分析器插件：对主模型的每条回复做**本地**情绪打分，把累积情绪状态投影进 Session，并在 DSH 网站注入一个可拖拽的悬浮情绪监测框。
 
-[![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.2-blue)](https://github.com/deepseek-ai/deepseek-harness)
+[![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.1-blue)](https://github.com/deepseek-ai/deepseek-harness)
 [![license: MIT](https://img.shields.io/badge/code-MIT-green)](LICENSE)
 [![model: Apache-2.0 default](https://img.shields.io/badge/model-Apache--2.0-blue)](docs/models.md)
 [![files <1000 lines](https://img.shields.io/badge/file-%E2%89%A41000%20lines-brightgreen)](CONTRIBUTING.md)
@@ -25,7 +25,7 @@
 |---|---|---|
 | ![折叠](docs/screenshots/widget-collapsed.png) | ![暗色](docs/screenshots/widget-dark.png) | ![等待态](docs/screenshots/widget-waiting.png) |
 
-## 架构（DSH 0.2.1-rc.2 实际 API）
+## 架构（DSH 0.2.2-rc.1 实际 API）
 
 ```
 agent/turn-stopping { agent, turn, signal }      ← 真实事件名（不是 turn-stopping）
@@ -65,6 +65,7 @@ curl http://127.0.0.1:<port>/api/emotion-analyzer/v1/state
 
 - 首次回复会触发 ONNX 加载（legacy 约 1.5s，Horizon small 约 2–3s），之后单条约 9–20ms；模型缺失时自动降级。
 - `onnxruntime-node` / `tokenizers` 是原生模块，Windows/macOS 的安装脚本批准与二进制下载需在目标机验证（本机只验证了 Linux + Node 24）。
+- **0.2.2 起宿主模块需共享实例**：`appendPluginRecord` 会做 Session 品牌检查，插件运行时从**运行中的 dsh 安装**解析 `@deepseek-ai/dsh-session`（`src/host-modules.ts`），`link:` 安装无需额外处理；非 dsh 进程内调用才回退插件本地副本（仅开发/单测）。
 
 ## 模型选择（v0.2）
 
@@ -103,6 +104,7 @@ curl http://127.0.0.1:<port>/api/emotion-analyzer/v1/state
 | 5 轮 sad 累积 / 10 轮 neutral 回落 | 单测通过（≤ CAP、< 0.2） |
 | 重启 projection 恢复 | 日志重放回归测试通过 |
 | 真实 DSH 页面悬浮框 | 展开/折叠/预览截图，0 console error |
+| 0.2.2-rc.1 真实模型完整 turn | ✅ headless 实测：horizon-small 20ms，v2 record 写入 + projection 折叠（pleasant 0.356） |
 
 完整矩阵与未验证项见 [docs/e2e.md](docs/e2e.md)。
 

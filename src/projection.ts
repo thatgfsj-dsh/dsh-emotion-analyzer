@@ -162,7 +162,7 @@ export function makeEmotionProjection(
   }
 }
 
-/** Minimal registry surface this plugin needs (calibrated 0.2.1-rc.2). */
+/** Minimal registry surface this plugin needs (calibrated 0.2.2-rc.1). */
 export interface SessionProjectionsLike {
   register(definition: EmotionProjectionDefinition): unknown
 }
@@ -170,13 +170,17 @@ export interface SessionProjectionsLike {
 /**
  * Register the `emotion` unit. Registration rides the calling fiber as an
  * effect (DSH contract), so no manual unregister is needed.
+ *
+ * 0.2.2 起 `register()` 返回 Promise，契约要求调用方 await 注册完成后再发布
+ * 消费者；这里返回 Promise 让 `apply` 能正确等待。
+ *
  * @param registry - `ctx.sessionProjections`.
  * @param readRecord - `pluginRecordOf` implementation.
  * @returns whatever the registry returned (handle/disposer), for tests.
  */
-export function registerEmotionProjection(
+export async function registerEmotionProjection(
   registry: SessionProjectionsLike,
   readRecord: (event: unknown) => { type: string; data: unknown } | undefined,
-): unknown {
-  return registry.register(makeEmotionProjection(readRecord))
+): Promise<unknown> {
+  return await registry.register(makeEmotionProjection(readRecord))
 }
