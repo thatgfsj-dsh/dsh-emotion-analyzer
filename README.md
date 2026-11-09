@@ -15,7 +15,8 @@
 
 ## 功能
 
-- **本地推理，零第三方模型 API**：默认 **Horizon-Labs/multilingual-emotions-small**（GoEmotions 28 标签、36 语言、Apache-2.0、官方 INT8，约 256 MiB）；legacy tabularisai（11 标签）保留为回退资产。ONNX 全本地 CPU 推理，**推理阶段不联网**、不额外消耗主模型 Token；仅“下载模型”时访问 HuggingFace。
+- **本地推理，零第三方模型 API（默认）**：默认 **Horizon-Labs/multilingual-emotions-small**（GoEmotions 28 标签、36 语言、Apache-2.0、官方 INT8，约 256 MiB）；legacy tabularisai（11 标签）保留为回退资产。ONNX 全本地 CPU 推理，**推理阶段不联网**、不额外消耗主模型 Token；仅“下载模型”时访问 HuggingFace。
+- **可选自定义 API（v0.2.5，opt-in）**：设置页可切到 OpenAI-compatible 端点（baseUrl / model / apiKeyEnv / timeoutMs），严格 JSON 7 维分数，超时/失败自动回退本地；默认关闭，开启后会把助手回复文本发送到该端点并按对方计费。详见 [docs/models.md](docs/models.md#9-自定义-openai-compatible-api41)。
 - **多语言**：默认模型覆盖 36 种语言；中文 / 英文按 CJK 占比显示语言标识。
 - **可插拔映射 profile**：模型标签 → 7 个统一维度（**愉快 pleasant** / 悲伤 / 愤怒 / 焦虑 / **反感 unwell** / **疑问 confused** / 平静）。内置 `legacy-11`、`go-emotions-28`、`zh-8` 三套 profile；阈值过滤 + 衰减 + 步长 + 封顶，参数集中在 `src/mapping.ts`。详见 [模型与映射](docs/models.md)。
 - **Session projection**：每轮分数以 `plugin:emotion-analyzer/turn`（ignorable）写入会话日志，由 `emotion` projection 单元纯同步 fold；重启、fork 自动恢复。
@@ -80,6 +81,26 @@ curl http://127.0.0.1:<port>/api/emotion-analyzer/v1/state
 - 下载/切换/删除/测试接口：`/api/emotion-analyzer/v1/*`（鉴权由 DSH Connection 负责）。
 - 完整预设、映射 profile、离线安装与风险见 [docs/models.md](docs/models.md)。
 
+## 打分通道（v0.2.5）
+
+| 通道 | 默认 | 数据去向 | 计费 | 失败行为 |
+|---|---|---|---|---|
+| 本地 ONNX | ✅ | 仅本机进程 | 无 | 回退 legacy / 本轮跳过 |
+| 自定义 OpenAI-compatible API | 需手动开启 | 助手回复文本 → 用户配置的端点 | 按对方价格 | 超时/HTTP/JSON 失败 → 回退本地 ONNX |
+
+```sh
+# 切到自定义 API（密钥只从环境变量读取，配置文件只存变量名）
+curl -X POST http://127.0.0.1:<port>/api/emotion-analyzer/v1/provider \
+  -H 'content-type: application/json' \
+  -d '{"type":"api","baseUrl":"https://api.example.com/v1","model":"gpt-4o-mini","apiKeyEnv":"EMOTION_API_KEY"}'
+# 切回本地
+curl -X POST http://127.0.0.1:<port>/api/emotion-analyzer/v1/provider \
+  -H 'content-type: application/json' -d '{"type":"local"}'
+```
+
+- API 输出直接是 7 个统一维度，记录使用 `unified-7` profile；切换通道不影响历史轮次重放。
+- 非法配置在保存时被拒绝；损坏的 API 配置会规范化回 `local`（安全默认）。
+
 ## 可调参数
 
 都集中在 `src/mapping.ts` 顶部：
@@ -105,6 +126,7 @@ curl http://127.0.0.1:<port>/api/emotion-analyzer/v1/state
 | 重启 projection 恢复 | 日志重放回归测试通过 |
 | 真实 DSH 页面悬浮框 | 展开/折叠/预览截图，0 console error |
 | 0.2.2-rc.1 真实模型完整 turn | ✅ headless 实测：horizon-small 20ms，v2 record 写入 + projection 折叠（pleasant 0.356） |
+| 自定义 API 通道（0.2.5） | ✅ 本机回环 server 实测：成功/超时/HTTP 错误/非法 JSON/密钥缺失 5 类路径 |
 
 完整矩阵与未验证项见 [docs/e2e.md](docs/e2e.md)。
 
@@ -121,7 +143,8 @@ curl http://127.0.0.1:<port>/api/emotion-analyzer/v1/state
 
 ## 隐私
 
-- 只把**助手回复文本**送进本进程内的 ONNX 推理；推理阶段不联网、不调用第三方模型 API。
+- 默认只把**助手回复文本**送进本进程内的 ONNX 推理；推理阶段不联网、不调用第三方模型 API。
+- 若用户**显式开启**「自定义 API」通道，助手回复文本（截断 4000 字符）会发送到用户填写的第三方端点并按对方价格计费；密钥只从 `apiKeyEnv` 指向的环境变量读取，不写入配置文件。
 - 只有当用户主动下载模型时才会访问 HuggingFace（模型权重不随仓库分发）。
 - 会话日志中的插件记录只含分数、语言、长度、FNV-1a 文本 hash 与时间，**不含回复原文**。
 - 悬浮框趋势最多 30 轮（内存 + localStorage），不上传。

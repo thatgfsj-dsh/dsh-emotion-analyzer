@@ -68,6 +68,27 @@ export interface ModelPreset {
   expectedExportPath?: string
 }
 
+/** 打分通道类型。 */
+export type ProviderType = 'local' | 'api'
+
+/** 设置页展示用的 provider 状态（密钥只暴露环境变量名，不暴露值）。 */
+export type ProviderState =
+  | { type: 'local'; ready: boolean; error: string | null }
+  | {
+      type: 'api'
+      baseUrl: string
+      model: string
+      apiKeyEnv?: string
+      timeoutMs?: number
+      ready: boolean
+      error: string | null
+    }
+
+/** `POST /provider` 的请求体。 */
+export type ProviderConfig =
+  | { type: 'local' }
+  | { type: 'api'; baseUrl: string; model: string; apiKeyEnv?: string; timeoutMs?: number }
+
 export interface ModelState {
   /** Currently effective runtime preset (null when no model is usable). */
   current: ModelPreset | null
@@ -87,6 +108,8 @@ export interface ModelState {
   fallback: boolean
   warnings: string[]
   source: ModelSource
+  /** 当前打分通道（本地 ONNX 或自定义 API）。 */
+  provider: ProviderState
   mockReason?: string
 }
 
@@ -410,7 +433,28 @@ export function normalizeModelState(raw: unknown, source: ModelSource = 'live', 
     fallback,
     warnings,
     source,
+    provider: normalizeProvider(record.provider, record.providerStatus),
     ...(mockReason ? { mockReason } : {}),
+  }
+}
+
+/** Normalise the /state provider block (secrets never leave the host). */
+export function normalizeProvider(raw: unknown, status: unknown): ProviderState {
+  const record = isRecord(raw) ? raw : {}
+  const statusRecord = isRecord(status) ? status : {}
+  const ready = firstBoolean(statusRecord.ready)
+  const error = firstString(statusRecord.error) ?? null
+  if (record.type !== 'api') {
+    return { type: 'local', ready: ready ?? true, error }
+  }
+  return {
+    type: 'api',
+    baseUrl: firstString(record.baseUrl) ?? '',
+    model: firstString(record.model) ?? '',
+    apiKeyEnv: firstString(record.apiKeyEnv),
+    timeoutMs: firstNumber(record.timeoutMs),
+    ready: ready ?? true,
+    error,
   }
 }
 
@@ -595,6 +639,7 @@ class MockBackend {
   private lastFailure: string | undefined
   private completedAt = 0
   private completedId: string | null = null
+  private provider: ProviderState = { type: 'local', ready: true, error: null }
 
   constructor(now: () => number) {
     this.now = now
@@ -653,7 +698,30 @@ class MockBackend {
       fallback: current ? current.fallback : false,
       warnings: [],
       source: 'mock',
+      provider: this.provider,
     }
+  }
+
+  saveProvider(config: ProviderConfig): ModelState {
+    if (config.type === 'api') {
+      const baseUrl = config.baseUrl.trim().replace(/\/+$/u, '')
+      const model = config.model.trim()
+      if (!/^https?:\/\//u.test(baseUrl) || model.length === 0) {
+        throw new ModelApiError('API 配置不完整：需要 http(s) baseUrl 与 model。', 422, 'invalid-provider')
+      }
+      this.provider = {
+        type: 'api',
+        baseUrl,
+        model,
+        ...(config.apiKeyEnv ? { apiKeyEnv: config.apiKeyEnv } : {}),
+        ...(config.timeoutMs ? { timeoutMs: config.timeoutMs } : {}),
+        ready: true,
+        error: null,
+      }
+    } else {
+      this.provider = { type: 'local', ready: true, error: null }
+    }
+    return this.getState()
   }
 
   selectModel(id: string): ModelState {
@@ -798,6 +866,12 @@ export class ModelApiClient {
   async removeModel(id: string): Promise<ModelState> {
     if (this.isMock()) return this.mock.removeModel(id)
     return this.stateCall('/model/' + encodeURIComponent(id), { method: 'DELETE' })
+  }
+
+  /** POST /provider：切换本地 ONNX / 自定义 API（#41）。 */
+  async saveProvider(config: ProviderConfig): Promise<ModelState> {
+    if (this.isMock()) return this.mock.saveProvider(config)
+    return this.stateCall('/provider', this.postBody(config as unknown as Record<string, unknown>))
   }
 
   /** POST /test { text }. */

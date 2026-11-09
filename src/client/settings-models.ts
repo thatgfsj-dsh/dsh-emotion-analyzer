@@ -20,6 +20,7 @@ import {
   type ModelState,
   type ModelTestResult,
 } from './model-api.ts'
+import { createProviderSection } from './settings-provider.ts'
 
 export interface ModelDisplayRow {
   key: string
@@ -346,6 +347,7 @@ export function createSettingsModels(
   options: { api?: ModelApiClient } = {},
 ): (props?: Record<string, unknown>) => any {
   const api = options.api
+  const ProviderSection = createProviderSection(React)
   return function EmotionModelSettings(): any {
     const client = api ?? getModelApi()
     const [state, setState] = React.useState(null)
@@ -823,6 +825,16 @@ export function createSettingsModels(
             )
           : null,
       ),
+    )
+
+    children.push(
+      React.createElement(ProviderSection, {
+        key: 'provider',
+        client,
+        state,
+        onStateChange: (next: ModelState) => setState(next),
+        onError: (message: string) => setError(message),
+      }),
     )
 
     return React.createElement('section', { 'data-emotion-analyzer-models': '', style: styles.section }, ...children)
