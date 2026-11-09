@@ -23,7 +23,7 @@ import {
 } from '../mapping.ts'
 
 /** 支持的映射 profile id。 */
-export const MAPPING_PROFILE_IDS = ['legacy-11', 'go-emotions-28', 'zh-8'] as const
+export const MAPPING_PROFILE_IDS = ['legacy-11', 'go-emotions-28', 'zh-8', 'unified-7'] as const
 /** 映射 profile id。 */
 export type MappingProfileId = (typeof MAPPING_PROFILE_IDS)[number]
 
@@ -197,11 +197,35 @@ const zhProfile = defineProfile({
   },
 })
 
+/**
+ * 统一 7 维（自定义 API 直出，#41）。
+ *
+ * API 通道让模型直接输出 7 个统一维度分数，因此这里是 identity 映射：
+ * 每个维度只由同名标签驱动。记录带 `profileId: 'unified-7'`，projection
+ * 重放不需要访问网络或模型。
+ */
+const unifiedProfile = defineProfile({
+  id: 'unified-7',
+  label: '统一 7 维（自定义 API 直出）',
+  labels: EMOTION_DIMENSIONS,
+  derivedLabels: [],
+  rules: {
+    pleasant: maxRule('pleasant'),
+    sad: maxRule('sad'),
+    angry: maxRule('angry'),
+    anxious: maxRule('anxious'),
+    unwell: maxRule('unwell'),
+    confused: maxRule('confused'),
+    neutral: maxRule('neutral'),
+  },
+})
+
 /** 所有内置 profile。 */
 export const MAPPING_PROFILES: Readonly<Record<MappingProfileId, MappingProfile>> = {
   'legacy-11': legacyProfile,
   'go-emotions-28': goEmotionsProfile,
   'zh-8': zhProfile,
+  'unified-7': unifiedProfile,
 }
 
 /** 判断任意字符串是否是已知 profile id。 */
