@@ -7,9 +7,9 @@
 [![model: Apache-2.0 default](https://img.shields.io/badge/model-Apache--2.0-blue)](docs/models.md)
 [![files <1000 lines](https://img.shields.io/badge/file-%E2%89%A41000%20lines-brightgreen)](CONTRIBUTING.md)
 
-[![宣传片：给你的 AI 聊天窗口装个情绪手环](docs/media/promo-poster.jpg)](https://github.com/Thatgfsj/dsh-emotion-analyzer/releases/download/promo-2026-10/promo45.mp4)
+[![宣传片：给你的 AI 聊天窗口装个情绪手环](docs/media/promo-poster.jpg)](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/releases/download/promo-2026-10/promo45.mp4)
 
-> ▶ **45 秒横版宣传片**（竖版 30 秒 × 3 个开场钩子见 [Release](https://github.com/Thatgfsj/dsh-emotion-analyzer/releases/tag/promo-2026-10)）· 数据口径与发布建议见 [docs/promo.md](docs/promo.md)
+> ▶ **45 秒横版宣传片**（竖版 30 秒 × 3 个开场钩子见 [Release](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/releases/tag/promo-2026-10)）· 数据口径与发布建议见 [docs/promo.md](docs/promo.md)
 
 ![悬浮框展开态](docs/screenshots/widget-expanded.png)
 
@@ -87,7 +87,7 @@ curl http://127.0.0.1:<port>/api/emotion-analyzer/v1/state
 | 常量 | 值 | 说明 |
 |---|---|---|
 | `THRESHOLD` | 0.2 | 聚合分低于该值视为噪声：整轮跳过，不积累也不衰减。**校准记录**：模型对“难过”常给 sadness≈0.27，0.3 会丢真实悲伤；中性句其余标签 <0.05，降到 0.2 不误报（#30） |
-| `DECAY` | 0.85 | 每轮回落系数。**校准记录**：提示词给 0.9，但 0.9^10=0.349 无法满足"5 轮伤心 + 10 轮中性后 sad<0.2"，故取 0.85（见 [#13](https://github.com/Thatgfsj/dsh-emotion-analyzer/issues/13)） |
+| `DECAY` | 0.85 | 每轮回落系数。**校准记录**：提示词给 0.9，但 0.9^10=0.349 无法满足"5 轮伤心 + 10 轮中性后 sad<0.2"，故取 0.85（见 [#13](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/issues/13)） |
 | `STEP_MAX` | 0.25 | 单轮命中最大步长，避免一次爆表 |
 | `CAP` | 1.0 | 统一维度封顶 |
 
