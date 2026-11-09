@@ -2,9 +2,9 @@
 
 面向社交平台的引流短片：**竖版 30 秒 × 3 个开场钩子 + 横版 45 秒**，中文烧录字幕、纯配乐无旁白。
 
-[![宣传片封面](media/promo-poster.jpg)](https://github.com/Thatgfsj/dsh-emotion-analyzer/releases/download/promo-2026-10/promo45.mp4)
+[![宣传片封面](media/promo-poster.jpg)](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/releases/download/promo-2026-10/promo45.mp4)
 
-> 点击封面播放横版 45 秒。竖版与其它变体见 [Release: promo-2026-10](https://github.com/Thatgfsj/dsh-emotion-analyzer/releases/tag/promo-2026-10)。
+> 点击封面播放横版 45 秒。竖版与其它变体见 [Release: promo-2026-10](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/releases/tag/promo-2026-10)。
 
 ## 成片与用途
 

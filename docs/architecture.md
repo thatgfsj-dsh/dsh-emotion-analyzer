@@ -74,7 +74,7 @@ v0.2 起映射按模型可插拔：`src/mapping.ts` 只提供通用规则函数�
 - `frustration` 只归 `angry`，不再同时推高 `sad` / `anxious`（#30）。
 - `disgust` 只归 `unwell`：实测“恶心”句 disgust≈0.99，若同时进 angry 会出现两条重复高亮（#32）。
 - `unwell` 不再用 sadness 拼装，避免与 sad 共线（40 条验收集 r=0.965 → 0.028），纯悲伤不再点亮“反感”（#32）。
-- `confused` 由模型 `surprise`（只覆盖真正的惊讶）+ 宿主启发式 `doubt`（覆盖中文疑问/不确定句，见 [issue #28](https://github.com/Thatgfsj/dsh-emotion-analyzer/issues/28)）组成；二者都是代理，不代表模型具备真实困惑分类能力。
+- `confused` 由模型 `surprise`（只覆盖真正的惊讶）+ 宿主启发式 `doubt`（覆盖中文疑问/不确定句，见 [issue #28](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/issues/28)）组成；二者都是代理，不代表模型具备真实困惑分类能力。
 
 `updateProjection(current, rawScores)` 是纯函数，按顺序执行：
 
@@ -89,7 +89,7 @@ v0.2 起映射按模型可插拔：`src/mapping.ts` 只提供通用规则函数�
 常量集中在 `src/mapping.ts` 顶部：`THRESHOLD=0.2`、`DECAY=0.85`、`STEP_MAX=0.25`、`CAP=1.0`。
 
 - `THRESHOLD` 从 0.3 降到 0.2（#30）：模型对“难过”常给 sadness≈0.27，0.3 会直接丢弃真实悲伤；中性句其余标签实测 <0.05，不会误报。
-- `DECAY` 取 0.85 而不是 0.9：0.9^10 = 0.349 无法满足“5 轮伤心 + 10 轮中性后 sad < 0.2”的验收（[issue #13](https://github.com/Thatgfsj/dsh-emotion-analyzer/issues/13)），0.85^10 = 0.197。
+- `DECAY` 取 0.85 而不是 0.9：0.9^10 = 0.349 无法满足“5 轮伤心 + 10 轮中性后 sad < 0.2”的验收（[issue #13](https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/issues/13)），0.85^10 = 0.197。
 - 当前 `THRESHOLD < STEP_MAX`，命中维度的单轮增量 = `min(raw, STEP_MAX)`：raw ∈ [0.2, 0.25) 时取 raw，否则封顶 0.25。
 
 示例：连续 5 轮高强度 `sad`（聚合 raw=1.0）→ `0.25 → 0.4625 → 0.643 → 0.797 → 0.927`（单调上升、不超 `CAP`）；随后 10 轮 `neutral`，`sad` 衰减为 `0.927 × 0.85¹⁰ ≈ 0.183 < 0.2`。

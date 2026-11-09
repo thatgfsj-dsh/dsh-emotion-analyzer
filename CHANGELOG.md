@@ -4,7 +4,10 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+> 版本历史说明：`v0.2.2-fix`（2026-10-26）晚于 `v0.2.3`（2026-10-25）发布但版本号更小，属历史遗留；
+> 自 `0.2.4` 起 tag 与 `package.json` 版本一一对应。
+
+## [0.2.4] - 2026-11-10
 
 ### Changed（适配 DSH 0.2.2-rc.1，#70）
 
@@ -19,9 +22,24 @@ uses [Semantic Versioning](https://semver.org/).
 
 - `npm run check`：158 tests / 157 pass / 1 skip / 0 fail；`npm run build` 通过。
 - `--patch` 冒烟加载真实插件行：`apply` 执行、无报错。
-- 真实模型完整 turn（headless profile + `--patch`）：horizon-small 20ms，写入 `plugin:emotion-analyzer/turn` v2 记录，projection `stateVersion 4 / turn 1 / dominant pleasant`。
+- 真实模型完整 turn（headless profile + `--patch`）：horizon-small 17–20ms，写入 `plugin:emotion-analyzer/turn` v2 记录，projection `stateVersion 4 / turn 1 / dominant pleasant`。
+
+### Changed（版本与发布收口，#72）
+
+- `package.json` version 0.2.2 → **0.2.4**，与最新 tag 对齐；补齐 `[0.2.3]` CHANGELOG 条目。
+- 仓库内 10 处旧组织链接 `Thatgfsj/dsh-emotion-analyzer` → `thatgfsj-dsh/dsh-emotion-analyzer`（`package.json` repository/homepage/bugs、README 宣传片、`docs/promo.md`、`docs/architecture.md`）。
+
+## [0.2.3] - 2026-10-25
+
+> tag `v0.2.3`；该 tag 在特性分支提交上，内容随 PR #58 进入 main。
+
+### Fixed
+
+- 模型页状态卡住：已下载模型显示未安装、其他模型一直「处理中」。下载中只让当前卡片显示取消/进度，其余保留各自动作（禁用）；下载后主动刷新 state；新增「刷新状态」按钮与实时/演示数据标识。
 
 ## [0.2.2] - 2026-10-26
+
+> 本版本以 tag `v0.2.2-fix` 发布（发布时间晚于 `v0.2.3`，版本号保持 0.2.2）。
 
 ### Fixed（外部审查修复批次 #59）
 

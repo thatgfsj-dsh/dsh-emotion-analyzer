@@ -1,6 +1,6 @@
 {
   "name": "dsh-emotion-analyzer",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "description": "DSH 情绪分析器：本地 ONNX 推理为每条主模型回复打分，投影进会话状态，并在 DSH 网站注入可拖拽的悬浮情绪监测框。",
   "type": "module",
   "main": "lib/index.js",
@@ -26,11 +26,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Thatgfsj/dsh-emotion-analyzer.git"
+    "url": "git+https://github.com/thatgfsj-dsh/dsh-emotion-analyzer.git"
   },
-  "homepage": "https://github.com/Thatgfsj/dsh-emotion-analyzer#readme",
+  "homepage": "https://github.com/thatgfsj-dsh/dsh-emotion-analyzer#readme",
   "bugs": {
-    "url": "https://github.com/Thatgfsj/dsh-emotion-analyzer/issues"
+    "url": "https://github.com/thatgfsj-dsh/dsh-emotion-analyzer/issues"
   },
   "keywords": [
     "dsh",
