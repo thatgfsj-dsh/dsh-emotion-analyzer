@@ -47,6 +47,7 @@ const STATE: ModelStatePayload = {
   effectiveFallback: true,
   runtimeError: null,
   provider: { type: 'local' },
+  providerStatus: { ready: true, error: null },
   models: [
     {
       id: 'horizon-small',
@@ -97,6 +98,10 @@ function stubService(): {
         if (id === 'legacy-tabularisai') throw new ModelServiceError('legacy_protected', 'legacy 不允许删除', 400)
         return STATE
       },
+      async selectProvider(provider) {
+        calls.push({ method: 'selectProvider', value: provider.type })
+        return STATE
+      },
       async testModel(text: string) {
         calls.push({ method: 'testModel', value: text })
         return { scores: { pleasant: 0.6 }, modelId: 'horizon-small', latencyMs: 12 }
@@ -129,15 +134,16 @@ function postJson(path: string, body: unknown): Request {
   })
 }
 
-test('注册全部路由：4 个 API + 4 个按预设预注册的 DELETE', () => {
+test('注册全部路由：5 个 API + 4 个按预设预注册的 DELETE', () => {
   const { routes } = setup()
-  assert.equal(routes.length, 8)
+  assert.equal(routes.length, 9)
   assert.deepEqual(
     routes.filter((route) => route.methods.includes('GET')).map((route) => route.path),
     [ROUTES.state],
   )
   assert.ok(routeOf(routes, ROUTES.select, 'POST'))
   assert.ok(routeOf(routes, ROUTES.download, 'POST'))
+  assert.ok(routeOf(routes, ROUTES.provider, 'POST'))
   assert.ok(routeOf(routes, ROUTES.test, 'POST'))
   for (const id of MODEL_PRESET_IDS) {
     const route = routeOf(routes, `${API_PREFIX}/model/${id}`, 'DELETE')
@@ -198,6 +204,9 @@ test('POST download / select 上的 ModelServiceError 映射为错误形状', as
     async deleteModel() {
       return STATE
     },
+    async selectProvider() {
+      return STATE
+    },
     async testModel() {
       return { scores: {}, modelId: 'x', latencyMs: 0 }
     },
@@ -240,4 +249,25 @@ test('DELETE model/{id}：按预设路径删除；legacy 返回 400', async () =
   )
   assert.equal(legacy.status, 400)
   assert.deepEqual(await legacy.json(), { error: { code: 'legacy_protected', message: 'legacy 不允许删除' } })
+})
+
+
+test('POST provider：local / api / 非法 type', async () => {
+  const { routes, calls } = setup()
+  const route = routeOf(routes, ROUTES.provider, 'POST')
+
+  const local = await route.fetch(postJson(ROUTES.provider, { type: 'local' }))
+  assert.equal(local.status, 200)
+  assert.deepEqual(calls.find((call) => call.method === 'selectProvider'), { method: 'selectProvider', value: 'local' })
+
+  const api = await route.fetch(
+    postJson(ROUTES.provider, { type: 'api', baseUrl: 'https://api.example.com/v1', model: 'gpt-4o-mini', apiKeyEnv: 'EMO_KEY', timeoutMs: 3000 }),
+  )
+  assert.equal(api.status, 200)
+  assert.deepEqual(calls.filter((call) => call.method === 'selectProvider').at(-1), { method: 'selectProvider', value: 'api' })
+
+  const bad = await route.fetch(postJson(ROUTES.provider, { type: 'nope' }))
+  assert.equal(bad.status, 400)
+  const body = (await bad.json()) as { error: { code: string } }
+  assert.equal(body.error.code, 'invalid_body')
 })

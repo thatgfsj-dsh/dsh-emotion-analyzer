@@ -10,6 +10,7 @@
  *   POST   /api/emotion-analyzer/v1/model/select       { id } → ModelStatePayload
  *   POST   /api/emotion-analyzer/v1/model/download     { id } → ModelStatePayload（202，立即返回）
  *   DELETE /api/emotion-analyzer/v1/model/{id}         → ModelStatePayload
+ *   POST   /api/emotion-analyzer/v1/provider           { type:'local' } | { type:'api', ... } → ModelStatePayload
  *   POST   /api/emotion-analyzer/v1/test               { text } → { scores, modelId, latencyMs }
  *
  * 错误统一为 `{ error: { code, message } }`。
@@ -19,6 +20,7 @@
  */
 import { MODEL_PRESET_IDS } from './registry.ts'
 import { ModelServiceError, type ModelStatePayload, type TestResult } from './service.ts'
+import type { ProviderSettings } from '../settings.ts'
 
 /** 所有路由的公共前缀。 */
 export const API_PREFIX = '/api/emotion-analyzer/v1'
@@ -28,6 +30,7 @@ export const ROUTES = {
   state: `${API_PREFIX}/state`,
   select: `${API_PREFIX}/model/select`,
   download: `${API_PREFIX}/model/download`,
+  provider: `${API_PREFIX}/provider`,
   test: `${API_PREFIX}/test`,
   model: (id: string): string => `${API_PREFIX}/model/${encodeURIComponent(id)}`,
 } as const
@@ -53,6 +56,7 @@ export interface EmotionRoutesService {
   selectModel(id: string): Promise<ModelStatePayload>
   downloadModel(id: string): Promise<ModelStatePayload>
   deleteModel(id: string): Promise<ModelStatePayload>
+  selectProvider(provider: ProviderSettings): Promise<ModelStatePayload>
   testModel(text: string): Promise<TestResult>
 }
 
@@ -161,6 +165,29 @@ export function registerEmotionRoutes(
       const id = requireString(body, 'id', 200)
       // 下载在后台进行，立即返回 202 + 当前 state；客户端轮询 GET state。
       return json(await service.downloadModel(id), 202)
+    } catch (error) {
+      return errorResponse(error)
+    }
+  })
+
+  register(ROUTES.provider, ['POST'], async (request) => {
+    try {
+      const body = await readJsonBody(request)
+      const type = body['type']
+      if (type !== 'local' && type !== 'api') {
+        throw new RouteError('invalid_body', "type 必须是 'local' 或 'api'", 400)
+      }
+      if (type === 'local') {
+        return json(await service.selectProvider({ type: 'local' }))
+      }
+      const provider: ProviderSettings = {
+        type: 'api',
+        baseUrl: typeof body['baseUrl'] === 'string' ? body['baseUrl'] : '',
+        model: typeof body['model'] === 'string' ? body['model'] : '',
+        ...(typeof body['apiKeyEnv'] === 'string' ? { apiKeyEnv: body['apiKeyEnv'] } : {}),
+        ...(typeof body['timeoutMs'] === 'number' ? { timeoutMs: body['timeoutMs'] } : {}),
+      }
+      return json(await service.selectProvider(provider))
     } catch (error) {
       return errorResponse(error)
     }

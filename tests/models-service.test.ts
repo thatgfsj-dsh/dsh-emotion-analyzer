@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { EmotionModelService, ModelServiceError } from '../src/models/service.ts'
+import type { ApiScorer } from '../src/models/api-scorer.ts'
 import { ModelManagerError, type ModelStatus } from '../src/models/manager.ts'
 import { MODEL_PRESETS, getModelPreset } from '../src/models/registry.ts'
 import type { ModelManager } from '../src/models/manager.ts'
@@ -105,6 +106,8 @@ function setup(options: {
   settings?: Partial<PluginSettings>
   downloaded?: string[]
   legacy?: boolean
+  env?: Readonly<Record<string, string | undefined>>
+  apiScorerFactory?: () => ApiScorer
 } = {}): {
   service: EmotionModelService
   manager: FakeManager
@@ -135,6 +138,8 @@ function setup(options: {
       settings = next
       saved.push(next)
     },
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.apiScorerFactory === undefined ? {} : { apiScorerFactory: options.apiScorerFactory }),
   })
   return { service, manager, scorers, saved, warnings }
 }
@@ -279,4 +284,140 @@ test('reload 重新读取设置并重建运行时', async () => {
   assert.equal(service.activeRuntime?.preset.id, 'legacy-tabularisai')
   await service.dispose()
   assert.equal(service.activeRuntime, undefined)
+})
+
+
+/* ------------------------------------------------------------------------- */
+/* 自定义 API 通道（#41）                                                     */
+/* ------------------------------------------------------------------------- */
+
+const API_PROVIDER = {
+  type: 'api' as const,
+  baseUrl: 'http://127.0.0.1:1/v1',
+  model: 'gpt-test',
+}
+
+/** 假 API scorer：成功返回固定 7 维，失败抛错。 */
+function fakeApiScorer(impl: { scores?: Record<string, number>; error?: Error } = {}): ApiScorer {
+  return {
+    async score() {
+      if (impl.error !== undefined) throw impl.error
+      return {
+        scores: impl.scores ?? {
+          pleasant: 0.9,
+          sad: 0.05,
+          angry: 0,
+          anxious: 0,
+          unwell: 0,
+          confused: 0.1,
+          neutral: 0.2,
+        },
+        latencyMs: 7,
+        modelId: 'gpt-test',
+      }
+    },
+  } as unknown as ApiScorer
+}
+
+test('API provider：没有本地模型也能打分，记录 profile=unified-7', async () => {
+  const { service, scorers } = setup({
+    legacy: false,
+    settings: { provider: API_PROVIDER },
+    apiScorerFactory: () => fakeApiScorer(),
+  })
+  await service.initialize()
+  assert.equal(service.activeRuntime, undefined)
+  assert.equal(await service.ensureReady(), true)
+  const result = await service.score('hello')
+  assert.ok(result)
+  assert.equal(result.modelId, 'api:gpt-test')
+  assert.equal(result.profileId, 'unified-7')
+  assert.equal(result.fallbackActive, false)
+  assert.equal(result.raw['pleasant'], 0.9)
+  assert.equal(result.raw['neutral'], 0.2)
+  assert.equal(scorers.length, 0, 'API 通道不应创建本地 scorer')
+  const state = await service.getState()
+  assert.equal(state.provider.type, 'api')
+  assert.equal(state.providerStatus.ready, true)
+  assert.equal(state.providerStatus.error, null)
+})
+
+test('API provider：失败时回退本地并标记 fallbackActive', async () => {
+  const { service } = setup({
+    legacy: true,
+    settings: { provider: API_PROVIDER },
+    apiScorerFactory: () => fakeApiScorer({ error: new Error('boom') }),
+  })
+  await service.initialize()
+  const result = await service.score('hello')
+  assert.ok(result)
+  assert.equal(result.modelId, 'legacy-tabularisai')
+  assert.equal(result.fallbackActive, true)
+  const state = await service.getState()
+  assert.equal(state.providerStatus.ready, false)
+  assert.match(String(state.providerStatus.error), /boom/u)
+})
+
+test('API provider：缺少 apiKeyEnv 环境变量 → 未就绪并回退本地', async () => {
+  const { service, warnings } = setup({
+    legacy: true,
+    env: {},
+    settings: { provider: { ...API_PROVIDER, apiKeyEnv: 'EMO_MISSING_KEY' } },
+    apiScorerFactory: () => fakeApiScorer({ error: new Error('环境变量 EMO_MISSING_KEY 未设置') }),
+  })
+  await service.initialize()
+  const state = await service.getState()
+  assert.equal(state.providerStatus.ready, false)
+  assert.match(String(state.providerStatus.error), /EMO_MISSING_KEY/u)
+  // API 未就绪 → ensureReady 回退本地通道（legacy 可用，因此为 true）。
+  assert.equal(await service.ensureReady(), true)
+  assert.ok(warnings.some((message) => /API 通道未就绪/u.test(message)))
+  const result = await service.score('hello')
+  assert.ok(result)
+  assert.equal(result.modelId, 'legacy-tabularisai')
+  assert.equal(result.fallbackActive, true)
+})
+
+test('API provider：testModel 走 API，失败映射为 api_failed 502', async () => {
+  const okService = setup({
+    legacy: false,
+    settings: { provider: API_PROVIDER },
+    apiScorerFactory: () => fakeApiScorer({ scores: { pleasant: 0.8 } }),
+  }).service
+  const tested = await okService.testModel('hello')
+  assert.equal(tested.modelId, 'api:gpt-test')
+  assert.equal(tested.scores['pleasant'], 0.8)
+
+  const failing = setup({
+    legacy: false,
+    settings: { provider: API_PROVIDER },
+    apiScorerFactory: () => fakeApiScorer({ error: new Error('timeout') }),
+  }).service
+  await assert.rejects(() => failing.testModel('hello'), (error: unknown) => {
+    assert.ok(error instanceof ModelServiceError)
+    assert.equal(error.code, 'api_failed')
+    assert.equal(error.status, 502)
+    return true
+  })
+})
+
+test('selectProvider：校验、持久化、切回本地重建运行时', async () => {
+  const { service, saved } = setup({ legacy: true })
+  await service.initialize()
+  const apiState = await service.selectProvider({ ...API_PROVIDER, timeoutMs: 5000 })
+  assert.equal(apiState.provider.type, 'api')
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0]?.provider.type, 'api')
+
+  const localState = await service.selectProvider({ type: 'local' })
+  assert.equal(localState.provider.type, 'local')
+  assert.equal(saved.length, 2)
+  assert.equal(service.activeRuntime?.preset.id, 'legacy-tabularisai')
+
+  await assert.rejects(() => service.selectProvider({ type: 'api', baseUrl: 'ftp://x', model: 'm' }), (error: unknown) => {
+    assert.ok(error instanceof ModelServiceError)
+    assert.equal(error.code, 'invalid_provider')
+    assert.equal(error.status, 400)
+    return true
+  })
 })
