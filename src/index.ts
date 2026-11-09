@@ -1,7 +1,7 @@
 /**
  * dsh-emotion-analyzer — Host entry（v0.2）。
  *
- * Flow (DSH 0.2.1-rc.2 calibrated):
+ * Flow (DSH 0.2.2-rc.1 calibrated):
  *   agent/turn-stopping { agent, turn, signal }   (serial)
  *     -> last assistant text
  *     -> EmotionModelService.score(text)           (active model, lazy ONNX)
@@ -12,9 +12,14 @@
  * v0.2 (#39): 模型由 `src/models/*` 管理（registry / download / settings /
  * profiles），默认 horizon-small，未下载时回退 legacy assets；切换模型后
  * 下一轮生效；Host routes 挂在 `/api/emotion-analyzer/v1/*`。
+ *
+ * 0.2.2 适配（#70）：`appendPluginRecord` 必须来自**宿主那一份**
+ * `@deepseek-ai/dsh-session`（品牌检查），因此写入走
+ * `src/host-modules.ts` 的惰性宿主解析，本地副本只作为开发/单测兜底。
  */
 import { appendPluginRecord, pluginRecordOf } from '@deepseek-ai/dsh-session'
 import { EMOTION_RECORD_TYPE, registerEmotionProjection } from './projection.ts'
+import { loadHostSessionModule, type HostModuleLogger } from './host-modules.ts'
 import { EmotionModelService, type ScoreResult } from './models/service.ts'
 import { registerEmotionRoutes, type ConnectionLike } from './models/routes.ts'
 import { detectDoubt, detectLanguage, extractLastAssistantText, hashText, truncateForScoring } from './text.ts'
@@ -93,10 +98,17 @@ export interface TurnServiceLike {
   score(text: string): Promise<ScoreResult | undefined>
 }
 
+/** 追加 plugin record 的写入面：同步或异步均可（宿主解析是异步的）。 */
+export type AppendRecordFn = (
+  session: unknown,
+  type: string,
+  data: Record<string, unknown>,
+) => unknown | Promise<unknown>
+
 /** 一轮 turn 的依赖注入（#61 / #66 测试入口）。 */
 export interface TurnDeps {
   readonly service: TurnServiceLike
-  readonly appendRecord: (session: unknown, type: string, data: Record<string, unknown>) => unknown
+  readonly appendRecord: AppendRecordFn
   readonly log: HostLogger
   readonly initTimeoutMs?: number
   readonly scoreTimeoutMs?: number
@@ -172,7 +184,7 @@ export async function runEmotionTurn(payload: TurnStoppingPayload, deps: TurnDep
   }
 
   try {
-    deps.appendRecord(session, EMOTION_RECORD_TYPE, record as unknown as Record<string, unknown>)
+    await deps.appendRecord(session, EMOTION_RECORD_TYPE, record as unknown as Record<string, unknown>)
   } catch (error) {
     deps.log.error?.('[emotion-analyzer] append plugin record failed:', error)
     return false
@@ -181,10 +193,32 @@ export async function runEmotionTurn(payload: TurnStoppingPayload, deps: TurnDep
   return true
 }
 
+/**
+ * 惰性 append：优先使用宿主那一份 `@deepseek-ai/dsh-session`（品牌检查要求与
+ * 宿主共享实例），解析失败时回退插件本地副本（开发 / 单测；真实宿主下跨实例
+ * 调用会抛 TypeError，由 runEmotionTurn 捕获并降级）。
+ *
+ * @param log - 宿主日志。
+ * @returns 同步或异步追加函数（此处恒为异步）。
+ */
+export function createAppendRecord(log: HostLogger): AppendRecordFn {
+  return async (session, type, data) => {
+    const host = await loadHostSessionModule(log as HostModuleLogger)
+    if (host !== undefined) {
+      return host.appendPluginRecord(session, type as `plugin:${string}`, data)
+    }
+    return appendPluginRecord(
+      session as Parameters<typeof appendPluginRecord>[0],
+      type as Parameters<typeof appendPluginRecord>[1],
+      data,
+    )
+  }
+}
+
 /** apply 的测试注入点（真实宿主不传）。 */
 export interface ApplyOverrides {
   readonly service?: EmotionModelService
-  readonly appendRecord?: (session: unknown, type: string, data: Record<string, unknown>) => unknown
+  readonly appendRecord?: AppendRecordFn
 }
 
 /** One-instance lifecycle shared by every turn. */
@@ -195,23 +229,21 @@ interface Runtime {
 
 /**
  * Plugin entry.
- * @param ctx - Cordis host context.
+ *
+ * 0.2.2 起 `sessionProjections.register()` 返回 Promise，契约要求注册完成后再
+ * 发布消费者，因此 apply 是 async 并 await 注册（Cordis 会 await 插件 apply）。
+ *
+ * @param ctx - Cordis host context。
+ * @param overrides - 测试注入点。
  */
-export function apply(ctx: HostContext, overrides: ApplyOverrides = {}): void {
+export async function apply(ctx: HostContext, overrides: ApplyOverrides = {}): Promise<void> {
   const log = loggerOf(ctx)
   const service =
     overrides.service ??
     new EmotionModelService({
       logger: log as Pick<Console, 'warn' | 'error'>,
     })
-  const appendRecord =
-    overrides.appendRecord ??
-    ((session: unknown, type: string, data: Record<string, unknown>): unknown =>
-      appendPluginRecord(
-        session as Parameters<typeof appendPluginRecord>[0],
-        type as Parameters<typeof appendPluginRecord>[1],
-        data,
-      ))
+  const appendRecord = overrides.appendRecord ?? createAppendRecord(log)
   const runtime: Runtime = { service, chains: new Map<string, Promise<void>>() }
 
   const registry = ctx.sessionProjections
@@ -219,7 +251,7 @@ export function apply(ctx: HostContext, overrides: ApplyOverrides = {}): void {
     log.warn?.('[emotion-analyzer] sessionProjections service missing; emotion state will not persist')
     return
   }
-  registerEmotionProjection(
+  await registerEmotionProjection(
     registry as Parameters<typeof registerEmotionProjection>[0],
     pluginRecordOf as unknown as (event: unknown) => { type: string; data: unknown } | undefined,
   )

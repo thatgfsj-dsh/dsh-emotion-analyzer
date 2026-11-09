@@ -9,4 +9,4 @@
 - 分支、worktree、本地构建产物（`lib/`、`demo/widget.iife.js`、`node_modules/`、模型文件）用完即清理。
 - 文档与代码同 PR 更新。
 - 不提交模型权重（CC-BY-NC-4.0，且 >100MB）。
-- Host API 以本机 DSH 0.2.1-rc.2 的类型定义为准，见 `docs/calibration.md`。
+- Host API 以本机 DSH 0.2.2-rc.1 的类型定义为准，见 `docs/calibration.md`。

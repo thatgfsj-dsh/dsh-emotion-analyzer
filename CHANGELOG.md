@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed（适配 DSH 0.2.2-rc.1，#70）
+
+- **宿主 `dsh-session` 共享实例**：`appendPluginRecord` 在 0.2.2 用 Session 品牌检查，`link:` 安装时插件本地副本会抛 `TypeError: Receiver must be an instance of class Session`。新增 `src/host-modules.ts`，运行时优先从运行中的 dsh 安装解析宿主模块（`realpath(process.argv[1])` 锚点），失败才回退本地副本（开发/单测），并缓存结果。
+- **projection 注册契约**：`ctx.sessionProjections.register()` 返回 Promise，`apply` 改为 async 并 `await` 注册完成。
+- **append 异步化**：`runEmotionTurn` 的 `appendRecord` 支持异步并在返回前 await（宿主模块解析是异步的）。
+- **依赖声明**：`@deepseek-ai/dsh-session` 同时进 `peerDependencies` + `devDependencies`（0.2.2-rc.1）；`engines.dsh` 收敛为 `>=0.2.2-rc.1 <0.3.0`（0.2.1 未复测，故不再声明支持）。
+- **测试**：新增 `tests/turn.test.ts`（turn 提取/打分/异步 append/超时降级）与 `tests/host-modules.test.ts`（宿主锚点优先、缓存、回退），`src/index.ts` 首次有回归覆盖。
+- **文档**：`docs/calibration.md` 重写为 0.2.2-rc.1 证据表并新增「第三方插件的宿主模块解析」；architecture / e2e / README / AGENTS 同步版本与验证结论。
+
+### Verified（0.2.2-rc.1）
+
+- `npm run check`：158 tests / 157 pass / 1 skip / 0 fail；`npm run build` 通过。
+- `--patch` 冒烟加载真实插件行：`apply` 执行、无报错。
+- 真实模型完整 turn（headless profile + `--patch`）：horizon-small 20ms，写入 `plugin:emotion-analyzer/turn` v2 记录，projection `stateVersion 4 / turn 1 / dominant pleasant`。
+
 ## [0.2.2] - 2026-10-26
 
 ### Fixed（外部审查修复批次 #59）
